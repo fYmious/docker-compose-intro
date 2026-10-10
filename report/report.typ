@@ -279,12 +279,12 @@ docker-compose ps
 ```
 #img("assets/2.png", [Проверка базового запуска: контейнеры])
 
-```
+```sh
 docker-compose logs app
 ```
 #img("assets/3.png", [Проверка базового запуска: логи `app`])
 
-```
+```sh
 docker-compose logs db
 ```
 #img("assets/4.png", [Проверка базового запуска: логи `db`])
@@ -371,12 +371,225 @@ docker-compose logs app | head -5
 
 ```sh
 curl http://localhost:5527/weather/Moscow
-```
-
-#img("assets/9.png", [Данные от API])
-
-```sh
 curl http://localhost:5527/weather/Moscow
 ```
 
-#img("assets/10.png", [Данные из кэша])
+#img("assets/9.png", [Данные из API и кэша])
+
+Затем я проверил статистику кэша:
+
+```sh
+curl http://localhost:5527/cache/stats
+```
+
+#img("assets/10.png", [Статистика кэша])
+
+Я проверил данные напрямую в Redis:
+
+```sh
+docker exec doschennikov-redis redis-cli KEYS "weather:*"
+docker exec doschennikov-redis redis-cli TTL weather:doschennikov:moscow
+```
+
+#img("assets/11.png", [Данные в Redis])
+
+== Задание 3.4
+
+Я посмотрел список сетей:
+
+```sh
+docker network ls --filter "name=doschennikov"
+```
+
+#img("assets/12.png", [Список сетей])
+
+```sh
+docker network inspect doschennikov-backend
+```
+
+#img("assets/13.png", [Детали сети])
+
+Я посмотрел список томов:
+
+```sh
+docker volumes ls --filter "name=doschennikov"
+```
+
+#img("assets/14.png", [Список томов])
+
+#pagebreak()
+= Этап 4. Масштабирование сервиса
+
+== Задание 4.1
+
+Я создал отдельный `docker-compose.scale.yml`. Для масштабирования я убрал `container_name` у `app` и изменил порт на диапазон:
+
+```yml
+# docker-compose.scale.yml
+# version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: doschennikov-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - doschennikov-pgdata:/var/lib/postgresql/data
+    networks:
+      - doschennikov-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: doschennikov-redis
+    networks:
+      - doschennikov-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "5527"
+    environment:
+      APP_OWNER: ${APP_OWNER}
+      APP_SECRET: ${APP_SECRET}
+      DATABASE_URL:
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL: ${CACHE_TTL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - doschennikov-backend
+
+volumes:
+  doschennikov-pgdata:
+
+networks:
+  doschennikov-backend:
+  driver: bridge
+```
+
+== Задание 4.2
+
+Я запустил масштабирование. Для этого я остановил текущие контейнеры:
+
+```sh
+docker-compose down
+```
+
+#img("assets/15.png", [Остановка контейнеров])
+
+Затем запустил с 3 экземпляра `app`:
+
+```sh
+docker-compose -f docker-compose.scale.yml up -d --build --scale app=3
+```
+
+#img("assets/16.png", [Запуск с масштабированием])
+
+Я также проверил, что запустилось 3 экземпляра:
+
+```sh
+docker-compose -f docker-compose.scale.yml ps
+```
+
+#img("assets/17.png", [Проверка запуска])
+
+== Задание 4.3
+
+Я проверил работу масштабированных экземпляров. Для этого я узнал назначенные порты:
+
+```sh
+docker-compose -f docker-compose.scale.yml ps app
+```
+
+#img("assets/18.png", [Назначенные порты])
+
+Затем я обратился к каждому экземпляру:
+
+```sh
+curl http://localhost:32771/health
+curl http://localhost:32772/health
+curl http://localhost:32773/health
+```
+
+#img("assets/19.png", [Healthcheck])
+
+Затем я проверил, что кэш Redis общий для всех экземпляров:
+
+```sh
+curl http://localhost:32771/weather/London
+curl http://localhost:32772/weather/London
+curl http://localhost:32773/cache/stats
+```
+
+#img("assets/20.png", [Общий кэш для нескольких экземпляров])
+
+== Задание 4.4
+
+Я вернулся к основной конфигурации. Для этого я остановил масштабированные контейнеры:
+
+```sh
+docker-compose -f docker-compose.scale.yml down
+```
+
+#img("assets/21.png", [Остановка контейнеров])
+
+А затем запустил основную конфигурацию:
+
+```sh
+docker-compose up -d
+```
+
+#img("assets/22.png", [Запуск основной конфигурации])
+
+#pagebreak()
+= Этап 5. Финальный артефакт
+
+== Задание 5.1
+
+Я сформировал финальный артефакт:
+
+```sh
+echo "========================================" && \
+echo "ЛР4 завершена: $(date '+%d.%m.%Y %H:%M:%S')" && \
+echo "Студент: $(whoami)@$(hostname)" && \
+echo "========================================" && \
+echo "" && \
+echo "Docker Compose сервисы:" && \
+docker-compose ps && \
+echo "" && \
+echo "Сети:" && \
+docker network ls --filter "name=doschennikov" && \
+echo "" && \
+echo "Volumes:" && \
+docker volume ls --filter "name=doschennikov" && \
+echo "" && \
+echo "Кэш Redis:" && \
+docker exec doschennikov-redis redis-cli KEYS "weather:*" && \
+echo "" && \
+echo "Погода (из кэша):" && \
+curl -s http://localhost:5527/cache/stats | python3 -m json.tool
+```
+
+#img("assets/23.png", [Финальный артефакт])
+
+#pagebreak()
+= Приложение
+
+
