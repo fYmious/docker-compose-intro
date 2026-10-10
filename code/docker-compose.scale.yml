@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:15
+    container_name: doschennikov-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - doschennikov-pgdata:/var/lib/postgresql/data 
+    networks:
+        - doschennikov-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s 
+      timeout: 3s 
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: doschennikov-redis
+    networks:
+        - doschennikov-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s 
+      timeout: 3s 
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "5527"
+    environment:
+      APP_OWNER: ${APP_OWNER}
+      APP_SECRET: ${APP_SECRET}
+      DATABASE_URL:
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL: ${CACHE_TTL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - doschennikov-backend
+
+volumes:
+  doschennikov-pgdata:
+
+networks:
+  doschennikov-backend:
+    driver: bridge
