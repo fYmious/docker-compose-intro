@@ -293,7 +293,7 @@ docker-compose logs db
 
 ```sh
 curl http://localhost:5527/
-curl http://localhost:5527/healthy
+curl http://localhost:5527/health
 ```
 
 #img("assets/5.png", [Проверка работоспособности контейнеров])
@@ -412,7 +412,7 @@ docker network inspect doschennikov-backend
 Я посмотрел список томов:
 
 ```sh
-docker volumes ls --filter "name=doschennikov"
+docker volume ls --filter "name=doschennikov"
 ```
 
 #img("assets/14.png", [Список томов])
@@ -592,4 +592,189 @@ curl -s http://localhost:5527/cache/stats | python3 -m json.tool
 #pagebreak()
 = Приложение
 
+`.dockerignore`:
 
+```exclude
+__pycache__/
+*.pyc
+*.pyo
+.git
+.gitignore
+.venv/
+venv/
+.env
+*.log
+Dockerfile*
+README.md
+```
+
+#pagebreak()
+`.env`:
+
+```env
+APP_OWNER=doschennikov
+APP_SECRET=secret97doschennikov
+APP_PORT=5527
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+POSTGRES_USER=user_465797
+POSTGRES_PASSWORD=pgpass_465797
+POSTGRES_DB=assistant_465797
+PG_PORT=5527
+REDIS_PORT=6467
+CACHE_TTL=120
+```
+
+#pagebreak()
+`docker-compose.scale.yml`:
+
+```yml
+services:
+  db:
+    image: postgres:15
+    container_name: doschennikov-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - doschennikov-pgdata:/var/lib/postgresql/data
+    networks:
+        - doschennikov-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: doschennikov-redis
+    networks:
+        - doschennikov-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "5527"
+    environment:
+      APP_OWNER: ${APP_OWNER}
+      APP_SECRET: ${APP_SECRET}
+      DATABASE_URL:
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL: ${CACHE_TTL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - doschennikov-backend
+
+volumes:
+  doschennikov-pgdata:
+
+networks:
+  doschennikov-backend:
+    driver: bridge
+```
+
+#pagebreak()
+`docker-compose.yml`:
+
+```yml
+services:
+  db:
+    container_name: doschennikov-postgres
+    image: postgres:15
+    networks:
+      - doschennikov-backend
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - doschennikov-pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    container_name: doschennikov-assist
+    networks:
+      - doschennikov-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "5527:5527"
+
+  redis:
+    image: redis:7-alpine
+    container_name: doschennikov-redis
+    ports:
+      - "${REDIS_PORT}:6379"
+    networks:
+      - doschennikov-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  doschennikov-pgdata:
+
+networks:
+  doschennikov-backend:
+    driver: bridge
+    name: doschennikov-backend
+```
+
+#pagebreak()
+`Dockerfile`:
+
+```Dockerfile
+FROM python:3.11 AS builder
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM python:3.11-slim
+
+LABEL maintainer="doschennikov@lab.local"
+LABEL version="1.0"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+
+COPY app/ ./app/
+
+EXPOSE 5527
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5527"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:5527/health || exit 1
+```
